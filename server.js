@@ -299,6 +299,42 @@ function staffIdentityEquals(a, b) {
   return samePerson(canonicalStaffName(a), canonicalStaffName(b));
 }
 
+function staffDeleteKey(value) {
+  const canonical = canonicalStaffName(value) || String(value || '').trim();
+  return String(canonical || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function setupDeletedStaffKeys(db) {
+  const keys = new Set([...REMOVED_INTERNAL_STAFF]);
+  const stored = db && db.setup && Array.isArray(db.setup.deletedStaffKeys) ? db.setup.deletedStaffKeys : [];
+  for (const value of stored) {
+    const key = staffDeleteKey(value);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+function markSetupStaffDeleted(db, name) {
+  if (!db.setup) db.setup = {};
+  if (!Array.isArray(db.setup.deletedStaffKeys)) db.setup.deletedStaffKeys = [];
+  const key = staffDeleteKey(name);
+  if (!key) return false;
+  if (!db.setup.deletedStaffKeys.map(String).includes(key)) db.setup.deletedStaffKeys.push(key);
+  if (Array.isArray(db.setup.staff)) {
+    db.setup.staff = db.setup.staff.filter(person => person && staffDeleteKey(person.name) !== key);
+  }
+  return true;
+}
+
+function unmarkSetupStaffDeleted(db, name) {
+  if (!db.setup || !Array.isArray(db.setup.deletedStaffKeys)) return false;
+  const key = staffDeleteKey(name);
+  if (!key) return false;
+  const before = db.setup.deletedStaffKeys.length;
+  db.setup.deletedStaffKeys = db.setup.deletedStaffKeys.filter(value => staffDeleteKey(value) !== key);
+  return before !== db.setup.deletedStaffKeys.length;
+}
+
 function normalizeLoginEmail(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return '';
@@ -513,7 +549,8 @@ async function loadDb() {
 
 function setupStaff(db) {
   const staff = db.setup && Array.isArray(db.setup.staff) ? db.setup.staff : SPREADSHEET_SETUP_STAFF;
-  return staff.filter(person => person && person.name);
+  const deleted = setupDeletedStaffKeys(db);
+  return staff.filter(person => person && person.name && !deleted.has(staffDeleteKey(person.name)));
 }
 
 function setupValues(db, key, fallback) {
@@ -551,6 +588,7 @@ function upsertSetupStaff(db, person = {}) {
   if (!Array.isArray(db.setup.staff)) db.setup.staff = [];
   const name = canonicalStaffName(person.name);
   if (!name) return null;
+  unmarkSetupStaffDeleted(db, name);
   const role = cleanText(person.role) || 'Team Member';
   const isExternal = Boolean(person.isExternal);
   const existing = db.setup.staff.find(item => item && staffIdentityEquals(item.name, name));
@@ -602,6 +640,7 @@ function syncWorkbookSetup(db) {
   };
 
   ensureArray('staff', SPREADSHEET_SETUP_STAFF.map(person => ({ ...person })));
+  if (!Array.isArray(db.setup.deletedStaffKeys)) { db.setup.deletedStaffKeys = []; changed = true; }
   const staffClean = normalizedSetupStaff(db.setup.staff);
   if (JSON.stringify(db.setup.staff) !== JSON.stringify(staffClean)) { db.setup.staff = staffClean; changed = true; }
   ensureArray('projectCategories', SPREADSHEET_PROJECT_CATEGORIES);
@@ -3235,11 +3274,16 @@ function renderUsers(db, user, message = '') {
     const emailField = isAdminAccount
       ? `<label>Official Email<input name="email" type="email" value="${escapeAttr(u.email || u.username || '')}" readonly></label>`
       : `<label>Official Email<input name="email" type="email" value="${escapeAttr(u.email || u.username || '')}" required placeholder="name@olutechagro.com"></label>`;
-    return `<tr><td><b>${escapeHtml(u.displayName)}</b><br><small>${escapeHtml(u.email || u.username)}</small></td><td>${escapeHtml(u.role)}</td><td>${escapeHtml(clearanceName(u.clearance))}</td><td>${sessionStatus}</td><td>${workStatus}<br><small>${escapeHtml(todayHours)} today</small></td><td>${accountStatus}</td><td>${escapeHtml(u.lastLoginAt ? fmtDate(u.lastLoginAt) : '')}</td><td><details><summary>Edit user</summary><form class="record-form" method="post" action="/admin/user-update"><input type="hidden" name="id" value="${escapeAttr(u.id)}">${emailField}<label>Display Name<input name="displayName" list="employeeList" value="${escapeAttr(u.displayName || '')}" required placeholder="Employee name">${staffDatalistHtml(db, 'employeeList', true)}</label><label>Role<input name="role" value="${escapeAttr(u.role || '')}" placeholder="Job role / responsibility"></label><label>Clearance<select name="clearance">${clearanceSelectOptions(u.clearance, 5)}</select></label><label>Account Access<select name="accountEnabled"><option value="true" ${accountEnabled ? 'selected' : ''}>Enabled - can log in</option><option value="false" ${!accountEnabled ? 'selected' : ''}>Disabled - cannot log in</option></select></label><label class="wide">Change / Reset Password <small>Level 5 only. User will be asked to change it after login.</small><input name="password" type="password" placeholder="Leave blank to keep current password"></label><button class="button">Save User</button></form></details></td></tr>`;
+    const isCurrentUser = u.id === user.id;
+    const canDeleteUser = !isAdminAccount && !isCurrentUser;
+    const deleteUserControl = canDeleteUser
+      ? `<div class="danger-zone"><h4>Delete user</h4><p class="muted">This removes the login account and staff suggestion only. Existing projects, tasks, chats and history stay intact.</p><form method="post" action="/admin/user-delete" onsubmit="return confirm('Delete this user account? Existing tasks and project history will remain.');"><input type="hidden" name="id" value="${escapeAttr(u.id)}"><button class="button danger-button">Delete User</button></form></div>`
+      : `<p class="muted">This protected account cannot be deleted here.</p>`;
+    return `<tr><td><b>${escapeHtml(u.displayName)}</b><br><small>${escapeHtml(u.email || u.username)}</small></td><td>${escapeHtml(u.role)}</td><td>${escapeHtml(clearanceName(u.clearance))}</td><td>${sessionStatus}</td><td>${workStatus}<br><small>${escapeHtml(todayHours)} today</small></td><td>${accountStatus}</td><td>${escapeHtml(u.lastLoginAt ? fmtDate(u.lastLoginAt) : '')}</td><td><details><summary>Edit user</summary><form class="record-form" method="post" action="/admin/user-update"><input type="hidden" name="id" value="${escapeAttr(u.id)}">${emailField}<label>Display Name<input name="displayName" list="employeeList" value="${escapeAttr(u.displayName || '')}" required placeholder="Employee name">${staffDatalistHtml(db, 'employeeList', true)}</label><label>Role<input name="role" value="${escapeAttr(u.role || '')}" placeholder="Job role / responsibility"></label><label>Clearance<select name="clearance">${clearanceSelectOptions(u.clearance, 5)}</select></label><label>Account Access<select name="accountEnabled"><option value="true" ${accountEnabled ? 'selected' : ''}>Enabled - can log in</option><option value="false" ${!accountEnabled ? 'selected' : ''}>Disabled - cannot log in</option></select></label><label class="wide">Change / Reset Password <small>Level 5 only. User will be asked to change it after login.</small><input name="password" type="password" placeholder="Leave blank to keep current password"></label><button class="button">Save User</button></form>${deleteUserControl}</details></td></tr>`;
   }).join('');
   const notice = message ? `<div class="notice">${escapeHtml(message)}</div>` : '';
   const createForm = `<details class="create-box"><summary>Add new employee / user</summary><form class="form-grid" method="post" action="/admin/user-new"><label>Display Name<input name="displayName" list="employeeList" required placeholder="e.g. TUNDE">${staffDatalistHtml(db, 'employeeList', true)}</label><label>Official Email<input name="email" type="email" required placeholder="name@olutechagro.com"></label><label>Role<input name="role" required placeholder="e.g. Export Documentation Officer"></label><label>Clearance<select name="clearance">${clearanceSelectOptions(2, 5)}</select></label><label>Account Access<select name="accountEnabled"><option value="true" selected>Enabled - can log in</option><option value="false">Disabled - cannot log in</option></select></label><label class="wide">Temporary Password<input type="password" name="password" required placeholder="Set a temporary password"></label><button class="button">Create Employee User</button></form><p class="muted">New employees are saved into the internal staff list and will appear as suggestions when assigning projects, workflow steps, tasks, delays, approvals, risks, lessons and other ownership fields.</p></details>`;
-  return page('Users', `<div class="panel"><h1>User, Role & Clearance Management</h1><p>Level 5 can add completely new employees, set their official Olutech Agro email login, role, clearance level and temporary password. Employee fields across the system are now type-to-search inputs, so you can type a new or existing staff name instead of being limited to a fixed dropdown.</p>${notice}${createForm}<div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Clearance</th><th>Active Session</th><th>Work Status</th><th>Account Access</th><th>Last Login</th><th>Manage</th></tr></thead><tbody>${rows}</tbody></table></div></div>`, user);
+  return page('Users', `<div class="panel"><h1>User, Role & Clearance Management</h1><p>Level 5 can add completely new employees, update users, delete user accounts, set official Olutech Agro email login, role, clearance level and temporary password. Employee fields across the system are now type-to-search inputs, so you can type a new or existing staff name instead of being limited to a fixed dropdown.</p>${notice}${createForm}<div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Clearance</th><th>Active Session</th><th>Work Status</th><th>Account Access</th><th>Last Login</th><th>Manage</th></tr></thead><tbody>${rows}</tbody></table></div></div>`, user);
 }
 
 function loginPage(error = '') {
@@ -4428,6 +4472,30 @@ async function handleRequest(req, res) {
       addAudit(db, user, 'user_update', `Updated ${target.username}`);
       await saveDb(db);
       return send(res, 200, renderUsers(db, user, 'User updated.'));
+    }
+
+    if (req.method === 'POST' && pathname === '/admin/user-delete') {
+      const user = requireClearance(req, res, db, 5); if (!user) return;
+      const form = await parseUrlEncoded(req);
+      const target = db.users.find(u => u.id === form.id);
+      if (!target) return send(res, 404, renderUsers(db, user, 'User not found.'));
+      const targetEmail = normalizeLoginEmail(target.email || target.username);
+      const isAdminTarget = targetEmail === `admin@${OFFICIAL_EMAIL_DOMAIN}` || String(target.displayName || '').toLowerCase().includes('system administrator');
+      if (isAdminTarget) return send(res, 400, renderUsers(db, user, 'The main system admin account cannot be deleted.'));
+      if (target.id === user.id) return send(res, 400, renderUsers(db, user, 'You cannot delete the account you are currently using.'));
+      const otherLevel5 = db.users.filter(u => u.id !== target.id && u.accountEnabled !== false && Number(u.clearance || 1) >= 5);
+      if (Number(target.clearance || 1) >= 5 && otherLevel5.length === 0) return send(res, 400, renderUsers(db, user, 'At least one active Level 5 account must remain.'));
+      const deletedName = target.displayName || target.email || target.username || target.id;
+      const deletedEmail = target.email || target.username || target.id;
+      removeUserAuthSessions(db, target.id);
+      const removed = removeById(db, 'users', target.id);
+      if (removed) {
+        markSetupStaffDeleted(db, deletedName);
+        syncSessionActivity(db);
+        addAudit(db, user, 'user_delete', `Deleted user ${deletedEmail}`);
+        await saveDb(db);
+      }
+      return send(res, 200, renderUsers(db, user, `${deletedName} has been deleted. Existing task/project history was kept.`));
     }
 
 

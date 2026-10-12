@@ -26,6 +26,11 @@ The login page no longer displays demo credentials. Users now sign in with their
 
 After logging in, each user can open **My Password** / **Change Password** to set a private password. Temporary passwords should be changed before live company use.
 
+
+## User deletion
+
+Level 5 administrators can now delete employee user accounts from **Users → Edit user → Delete user**. Deleting a user removes the login account and removes that employee from assignment suggestions, but it keeps existing projects, tasks, chats, attendance history, audit records and other historical records intact. The main system admin account and the account currently being used cannot be deleted from the Users page.
+
 ## Login and password rules
 
 - Login now uses official `@olutechagro.com` email addresses instead of short usernames.
