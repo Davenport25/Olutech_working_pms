@@ -3260,13 +3260,54 @@ function renderPasswordAccessClosed(user, message = 'Your password has already b
   return page('Password Updated', `<div class="panel narrow-panel"><h1>Password Updated</h1><div class="notice">${escapeHtml(message)}</div><p>The password-change feature is only shown to normal users while they are still using a temporary password.</p><a class="button" href="/dashboard">Back to dashboard</a></div>`, user);
 }
 
+
+function headerValue(req, name) {
+  const value = req.headers[String(name).toLowerCase()];
+  if (Array.isArray(value)) return value[0] || '';
+  return value ? String(value) : '';
+}
+
+function normalizeRoutePath(value) {
+  let route = String(value || '').trim();
+  if (!route || route === 'undefined' || route === 'null') return '';
+  try { route = decodeURIComponent(route); } catch (_) {}
+  if (/^https?:\/\//i.test(route)) {
+    try { route = new URL(route).pathname; } catch (_) {}
+  }
+  route = route.split('?')[0];
+  if (!route.startsWith('/')) route = '/' + route;
+  route = route.replace(/\/+/g, '/');
+  return route || '/';
+}
+
+function requestUrl(req) {
+  const host = req.headers.host || 'localhost';
+  const parsed = new URL(req.url || '/', `http://${host}`);
+  const rewrittenToApi = parsed.pathname === '/api/index.js' || parsed.pathname === '/api' || parsed.pathname === '/api/';
+  if (rewrittenToApi) {
+    const preservedPath = parsed.searchParams.get('__path')
+      || parsed.searchParams.get('path')
+      || headerValue(req, 'x-original-url')
+      || headerValue(req, 'x-rewrite-url')
+      || headerValue(req, 'x-forwarded-uri')
+      || headerValue(req, 'x-invoke-path');
+    const routePath = normalizeRoutePath(preservedPath);
+    if (routePath && !routePath.startsWith('/api')) {
+      parsed.pathname = routePath;
+      parsed.searchParams.delete('__path');
+      parsed.searchParams.delete('path');
+    }
+  }
+  return parsed;
+}
+
 async function handleRequest(req, res) {
   const db = await loadDb();
   let maintenanceChanged = false;
   maintenanceChanged = syncSessionActivity(db) || maintenanceChanged;
   maintenanceChanged = autoClockOutAttendance(db) || maintenanceChanged;
   if (maintenanceChanged) await saveDb(db);
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const url = requestUrl(req);
   const pathname = decodeURIComponent(url.pathname);
 
   try {
