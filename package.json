@@ -1,0 +1,22 @@
+{
+  "name": "olutech-agro-project-management-system",
+  "version": "1.0.0",
+  "description": "Web-based project management system generated from the Olutech Agro Operations Productivity Tracker spreadsheet.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "vercel-build": "echo \"No build step required\""
+  },
+  "keywords": [
+    "project-management",
+    "operations",
+    "file-storage",
+    "clearance"
+  ],
+  "author": "Olutech Agro",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}
